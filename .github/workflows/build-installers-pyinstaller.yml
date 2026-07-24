@@ -446,15 +446,21 @@ jobs:
         if: matrix.variant == 'cuda'
         shell: bash
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          # R2 credentials live in ORGANIZATION secrets named CLOUDFLARE_R2_*. The aws CLI
+          # authenticates from the AWS_* names (not R2_*), so map them here. The bucket name
+          # is public (it's in the r2.dev download URL), so it's a literal, not a secret.
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_S3_ENDPOINT }}
+          R2_BUCKET: freemocap-releases
         run: |
-          if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_BUCKET" ]; then
-            echo "::warning::R2 credentials not configured — skipping R2 upload"
-            echo "::warning::Set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET secrets"
-            exit 0
+          # Fail loudly (per the repo's no-fallbacks rule): a green build that silently
+          # skipped this upload is exactly how GPU builds went missing after alpha.11.
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$R2_ENDPOINT" ]; then
+            echo "::error::R2 credentials missing — cannot upload the Linux CUDA build."
+            echo "::error::Expected org secrets: CLOUDFLARE_R2_ACCESS_KEY_ID / CLOUDFLARE_R2_SECRET_ACCESS_KEY / CLOUDFLARE_R2_S3_ENDPOINT"
+            exit 1
           fi
 
           echo "=== Uploading CUDA builds to Cloudflare R2 ==="
@@ -606,10 +612,14 @@ jobs:
 
       - name: Prepare release assets
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          # R2 credentials live in ORGANIZATION secrets named CLOUDFLARE_R2_*. The aws CLI
+          # authenticates from the AWS_* names (not R2_*), so map them here. The bucket name
+          # is public (it's in the r2.dev download URL), so it's a literal, not a secret.
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_S3_ENDPOINT }}
+          R2_BUCKET: freemocap-releases
         run: |
           mkdir -p release-assets
 
@@ -626,12 +636,15 @@ jobs:
           # zips* are built and pushed here (on this Linux runner, where `zip` is reliable
           # for >2 GB archives). The size guard below enforces that nothing left in
           # release-assets/ (i.e. GitHub-bound) exceeds the limit.
-          R2_READY=0
-          if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_BUCKET" ]; then
-            pip install --quiet awscli && R2_READY=1
-          else
-            echo "::warning::R2 credentials not configured — CUDA server bundles will be skipped"
+          # Fail loudly (per the repo's no-fallbacks rule): the Linux CUDA server bundle
+          # only exists on R2, so missing credentials must break the release, not skip it.
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$R2_ENDPOINT" ]; then
+            echo "::error::R2 credentials missing — cannot upload the Linux CUDA server bundle."
+            echo "::error::Expected org secrets: CLOUDFLARE_R2_ACCESS_KEY_ID / CLOUDFLARE_R2_SECRET_ACCESS_KEY / CLOUDFLARE_R2_S3_ENDPOINT"
+            exit 1
           fi
+          pip install --quiet awscli
+          R2_READY=1
 
           # ── Server bundles (onedir launcher + _internal/ → single .zip) ──
           for dir in artifacts/server-*; do
